@@ -12,7 +12,7 @@
   | obtain it through the world-wide-web, please send a note to          |
   | license@php.net so we can mail you a copy immediately.               |
   +----------------------------------------------------------------------+
-  | Author:                                                              |
+  | Author: Camry.Chen <camry.chen@foxmail.com>                          |
   +----------------------------------------------------------------------+
 */
 
@@ -42,16 +42,16 @@ struct context {
     u64_t last_ts;
 
     /* Various once initialized variables */
-    u64_t datacenter_id;
-    u64_t worker_id;
+    u64_t server_id;
+    u64_t type_id;
     u64_t twepoch;
 
-    unsigned char worker_id_bits;
-    unsigned char datacenter_id_bits;
+    unsigned char type_id_bits;
+    unsigned char server_id_bits;
     unsigned char sequence_bits;
 
-    int worker_id_shift;
-    int datacenter_id_shift;
+    int type_id_shift;
+    int server_id_shift;
     int timestamp_left_shift;
 
     int sequence_mask;
@@ -67,112 +67,78 @@ static struct shm shmem;
 static struct context *context;
 static pid_t current_pid = 0;
 
-static u64_t datacenter_id;
-static u64_t worker_id;
+static u64_t server_id;
+static u64_t type_id;
 static u64_t twepoch;
 
-ZEND_INI_MH(atom_ini_set_datacenter_id)
+ZEND_INI_MH(atom_ini_set_server_id)
 {
-#if ZEND_MODULE_API_NO >= 20151012  /* PHP7 */
+    #if ZEND_MODULE_API_NO >= 20151012  /* PHP7 */
 
-    if (ZSTR_LEN(new_value) == 0) {
-        return FAILURE;
-    }
+        if (ZSTR_LEN(new_value) == 0) {
+            return FAILURE;
+        }
 
-    datacenter_id = (u64_t)atoi(ZSTR_VAL(new_value));
-    if (datacenter_id < 0 || datacenter_id > 31) {
-        return FAILURE;
-    }
+        server_id = (u64_t)atoi(ZSTR_VAL(new_value));
+        if (server_id < 0 || server_id > 16383) {
+            return FAILURE;
+        }
 
-    return SUCCESS;
+        return SUCCESS;
 
-#else
+    #else
 
-    if (new_value_length == 0) {
-        return FAILURE;
-    }
+        if (new_value_length == 0) {
+            return FAILURE;
+        }
 
-    datacenter_id = (u64_t)atoi(new_value);
-    if (datacenter_id < 0 || datacenter_id > 31) {
-        return FAILURE;
-    }
+        server_id = (u64_t)atoi(new_value);
+        if (server_id < 0 || server_id > 16383) {
+            return FAILURE;
+        }
 
-    return SUCCESS;
+        return SUCCESS;
 
-#endif
-}
-
-ZEND_INI_MH(atom_ini_set_worker)
-{
-#if ZEND_MODULE_API_NO >= 20151012
-
-    if (ZSTR_LEN(new_value) == 0) {
-        return FAILURE;
-    }
-
-    worker_id = (u64_t)atoi(ZSTR_VAL(new_value));
-    if (worker_id < 0 || worker_id > 31) {
-        return FAILURE;
-    }
-
-    return SUCCESS;
-
-#else
-
-    if (new_value_length == 0) {
-        return FAILURE;
-    }
-
-    worker_id = (u64_t)atoi(new_value);
-    if (worker_id < 0 || worker_id > 31) {
-        return FAILURE;
-    }
-
-    return SUCCESS;
-
-#endif
+    #endif
 }
 
 ZEND_INI_MH(atom_ini_set_twepoch)
 {
-#if ZEND_MODULE_API_NO >= 20151012
+    #if ZEND_MODULE_API_NO >= 20151012
 
-    if (ZSTR_LEN(new_value) == 0) {
-        return FAILURE;
-    }
+        if (ZSTR_LEN(new_value) == 0) {
+            return FAILURE;
+        }
 
-    sscanf(ZSTR_VAL(new_value), "%llu", &twepoch);
-    if (twepoch <= 0ULL) {
-        return FAILURE;
-    }
+        sscanf(ZSTR_VAL(new_value), "%llu", &twepoch);
+        if (twepoch <= 0ULL) {
+            return FAILURE;
+        }
 
-    return SUCCESS;
+        return SUCCESS;
 
-#else
+    #else
 
-    if (new_value_length == 0) {
-        return FAILURE;
-    }
+        if (new_value_length == 0) {
+            return FAILURE;
+        }
 
-    sscanf(new_value, "%llu", &twepoch);
-    if (twepoch <= 0ULL) {
-        return FAILURE;
-    }
+        sscanf(new_value, "%llu", &twepoch);
+        if (twepoch <= 0ULL) {
+            return FAILURE;
+        }
 
-    return SUCCESS;
+        return SUCCESS;
 
-#endif
+    #endif
 }
 
 PHP_INI_BEGIN()
-    PHP_INI_ENTRY("atom.datacenter", "0", PHP_INI_ALL,
-          atom_ini_set_datacenter_id)
-    PHP_INI_ENTRY("atom.worker", "0", PHP_INI_ALL,
-          atom_ini_set_worker)
+    PHP_INI_ENTRY("atom.server_id", "0", PHP_INI_ALL,
+          atom_ini_set_server_id)
     PHP_INI_ENTRY("atom.twepoch", "1451606400000", PHP_INI_ALL, /* 2016-01-01 */
           atom_ini_set_twepoch)
 PHP_INI_END()
-
 
 static u64_t realtime()
 {
@@ -211,9 +177,19 @@ PHP_FUNCTION(atom_next_id)
     u64_t retval;
     int len;
     char buf[128];
+    short type_id;
 
     if (current == 0ULL) {
         RETURN_FALSE;
+    }
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "l", &type_id) == FAILURE)
+    {
+        RETURN_FALSE;
+    }
+
+    if (type_id < 0 || type_id > 31) {
+        zend_throw_exception(NULL, "The parameter value is out of range.(0~31)", 0);
     }
 
     /* Make sure one process get the lock at the same time */
@@ -230,21 +206,22 @@ PHP_FUNCTION(atom_next_id)
     }
 
     context->last_ts = current;
+    context->type_id = type_id;
 
     retval = ((current - context->twepoch) << context->timestamp_left_shift)
-            | (context->datacenter_id << context->datacenter_id_shift)
-            | (context->worker_id << context->worker_id_shift)
+            | (context->server_id << context->server_id_shift)
+            | (context->type_id << context->type_id_shift)
             | context->sequence;
 
     spin_unlock(&context->lock, (int)current_pid);
 
     len = sprintf(buf, "%llu", retval);
 
-#if ZEND_MODULE_API_NO >= 20151012
-    RETURN_STRINGL(buf, len);
-#else
-    RETURN_STRINGL(buf, len, 1);
-#endif
+    #if ZEND_MODULE_API_NO >= 20151012
+        RETURN_STRINGL(buf, len);
+    #else
+        RETURN_STRINGL(buf, len, 1);
+    #endif
 }
 
 
@@ -271,14 +248,14 @@ PHP_FUNCTION(atom_explain)
      */
 
     ts = ((id >> context->timestamp_left_shift) + context->twepoch) / 1000ULL;
-    dc = (id >> context->datacenter_id_shift) & 0x1FULL;
-    wk = (id >> context->worker_id_shift) & 0x1FULL;
+    dc = (id >> context->server_id_shift) & 0x3FFFULL;
+    wk = (id >> context->type_id_shift) & 0x1FULL;
 
     array_init(return_value);
 
     add_assoc_long(return_value, "timestamp", ts);
-    add_assoc_long(return_value, "datacenter", dc);
-    add_assoc_long(return_value, "worker", wk);
+    add_assoc_long(return_value, "server_id", dc);
+    add_assoc_long(return_value, "type_id", wk);
 }
 
 
@@ -300,22 +277,22 @@ int startup_atom_module()
     context->last_ts = 0ULL;
 
     /* would not changing */
-    context->datacenter_id = datacenter_id;
-    context->worker_id = worker_id;
+    context->server_id = server_id;
+    context->type_id = type_id;
     context->twepoch = twepoch;
 
-    context->worker_id_bits = 5;
-    context->datacenter_id_bits = 5;
+    context->type_id_bits = 5;
+    context->server_id_bits = 14;
     context->sequence_bits = 12;
 
-    context->worker_id_shift = context->sequence_bits;
+    context->type_id_shift = context->sequence_bits;
 
-    context->datacenter_id_shift = context->sequence_bits
-                                 + context->worker_id_bits;
+    context->server_id_shift = context->sequence_bits
+                                 + context->type_id_bits;
 
     context->timestamp_left_shift = context->sequence_bits
-                                  + context->worker_id_bits
-                                  + context->datacenter_id_bits;
+                                  + context->type_id_bits
+                                  + context->server_id_bits;
 
     context->sequence_mask = -1 ^ (-1 << context->sequence_bits);
 

@@ -1,21 +1,17 @@
 <?php
-$br = (php_sapi_name() == "cli")? "":"<br>";
 
-if(!extension_loaded('atom')) {
-	dl('atom.' . PHP_SHLIB_SUFFIX);
-}
-$module = 'atom';
-$functions = get_extension_funcs($module);
-echo "Functions available in the test extension:$br\n";
-foreach($functions as $func) {
-    echo $func."$br\n";
-}
-echo "$br\n";
-$function = 'confirm_' . $module . '_compiled';
-if (extension_loaded($module)) {
-	$str = $function($module);
-} else {
-	$str = "Module $module is not compiled into PHP";
-}
-echo "$str\n";
-?>
+/**
+ * 生成唯一 ID。
+ *
+ * @param int $type_id 指定类型。(注: 取值范围: 0~31)
+ * @return int
+ */
+function atom_next_id(int $type_id) { }
+
+/**
+ * 反向解析唯一 ID。
+ *
+ * @param int $id 指定唯一 ID。
+ * @return array
+ */
+function atom_explain(int $id) { }
